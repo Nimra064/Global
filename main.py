@@ -4,7 +4,6 @@ import shutil
 import time
 import psycopg2
 from datetime import datetime
-import threading
 
 # PostgreSQL connection parameters
 PGDATABASE = "postgres"
@@ -21,7 +20,7 @@ os.makedirs(dest_directory, exist_ok=True)
 db_params = {
     "dbname": "automation",
     "user": "postgres",
-    "password": "1234",
+    "password": "123",
     "host": "localhost",
     "port": "5432"
 }
@@ -78,69 +77,10 @@ def validate_ticket(ticket):
     return ticket.isdigit()
 
 def check_ticket_dir_in_backup(ticket):
-    existdir = os.path.isdir(os.path.join(dest_directory, ticket))
-    if existdir:
-        return True
-    return False
-
-def backup_progress_monitor(ticket, backup_file):
-    backup_file = os.path.join(dest_directory, ticket, f"backup_{ticket}.db")
-    start_time = time.time()
-    while os.path.exists(backup_file):
-        backup_size = os.path.getsize(backup_file)
-        elapsed_time = time.time() - start_time
-        if elapsed_time != 0:  
-            transfer_rate = backup_size / elapsed_time
-        else:
-            transfer_rate = 0
-        remaining_size = os.path.getsize(backup_file)
-        if transfer_rate != 0:  
-            estimated_time = remaining_size / transfer_rate
-        else:
-            estimated_time = 0
-        progress = (backup_size / backup_size) * 100
-        print(f"Backup progress: {progress:.2f}%, estimated time remaining: {estimated_time:.2f} seconds")
-        time.sleep(1)
-        if progress >= 100:
-            break
-    print("Backup process has completed.")
-
-def perform_backup(database_name, ticket):
-    backup_file = take_psql_backup(database_name, ticket)
-    if backup_file:
-        print(f"Backup completed for ticket {ticket}.")
-        backup_status_id = update_backup_status(ticket, datetime.now(), None, "Completed", os.path.getsize(backup_file))
-
-def main():
-    # Create the backup_status table if it doesn't exist
-    create_backup_status_table()
-
-    # Get the database name
-    database_name = get_database_name()
-
-    # Get the ticket number
-    while True:
-        if database_name:
-            ticket = input("Enter the Ticket Number: ")
-            if validate_ticket(ticket):
-                if check_ticket_dir_in_backup(ticket):
-                    print("Backup folder for this ticket already exists. Please enter a unique ticket number.")
-                else:
-                    break
-
-    # Record the start time
-    start_time = datetime.now()
-
-    # Backup creation thread
-    backup_thread = threading.Thread(target=perform_backup, args=(database_name, ticket))
-    backup_thread.start()
-
-    # Progress monitoring thread
-    progress_thread = threading.Thread(target=backup_progress_monitor, args=(ticket, None))
-    progress_thread.start()
-
-    backup_thread.join()
-    progress_thread.join()
+    existdir=os.path.isdir(os.path.join(dest_directory, ticket))
+    if existdir == True:
+        return {'detail' : 'Ticket ID backup Already Exist' , 'status_code' : 403}
+    return {'detail' : 'Successfully Backup create against ticket ID' , 'status_code' : 200}
 
 def validate_backup_size(database_name, backup_file):
     try:
@@ -164,17 +104,38 @@ def validate_backup_size(database_name, backup_file):
         print(f"Error validating backup size: {e}")
         return False
 
+
 def take_psql_backup(database_name, ticket):
     backup_dir = os.path.join(dest_directory, ticket)
     os.makedirs(backup_dir, exist_ok=True)
-    backup_file = os.path.join(backup_dir, f"backup_{ticket}.db")
-    with open(backup_file, "wb") as f:
-        try:
-            subprocess.Popen(["pg_dump", "-d", database_name], stdout=f, stderr=subprocess.PIPE)
-            return backup_file
-        except subprocess.CalledProcessError as e:
-            print(f"Error taking backup: {e}")
-            return None
+    backup_file = os.path.join(backup_dir, f"backup_{ticket}.sql")
+    try:
+        with open(backup_file, "w") as f:
+            subprocess.run(["pg_dump", "-d", database_name, "-F", "p"], stdout=f, check=True)
+        return backup_file
+    except subprocess.CalledProcessError as e:
+        print(f"Error taking backup: {e}")
+        return None
+
+def get_backup_progress(ticket, backup_file):
+    backup_file = os.path.join(dest_directory, ticket, f"backup_{ticket}.sql")
+    start_time = time.time()
+    while os.path.exists(backup_file):
+        backup_size = os.path.getsize(backup_file)
+        elapsed_time = time.time() - start_time
+        if elapsed_time != 0:  
+            transfer_rate = backup_size / elapsed_time
+        else:
+            transfer_rate = 0
+        remaining_size = os.path.getsize(backup_file)
+        if transfer_rate != 0:  
+            estimated_time = remaining_size / transfer_rate
+        else:
+            estimated_time = 0
+        print(f"Backup progress: {backup_size} bytes written, estimated time remaining: {estimated_time} seconds")
+        time.sleep(1)
+        break
+    print("Backup process has completed.")
 
 def update_backup_status(ticket, createdat, updatedat, status, backup_size):
     try:
@@ -190,7 +151,55 @@ def update_backup_status(ticket, createdat, updatedat, status, backup_size):
     except psycopg2.Error as e:
         print(f"Error updating backup status: {e}")
         return None
+    
+
+def main():
+    # Create the backup_status table if it doesn't exist
+    create_backup_status_table()
+
+    # Get the database name
+    database_name = get_database_name()
+
+    # Get the ticket number
+    while True:
+        if database_name:
+            ticket = input("Enter the Ticket Number: ")
+            if validate_ticket(ticket) and check_ticket_dir_in_backup(ticket):
+                break   
+
+    # Record the start time
+    start_time = datetime.now()
+
+    # Take the database backup
+    backup_file = take_psql_backup(database_name, ticket)
+    if backup_file is not None:
+        # Validate the backup size
+        if validate_backup_size(database_name, backup_file):
+            # Update backup status to "InProgress"
+            backup_status_id = update_backup_status(ticket, start_time, None, "InProgress", None)
+            if backup_status_id:
+                print(backup_status_id)
+                get_backup_progress(ticket, backup_file)
+                exit_status = 0
+                status = "Successful"
+            else:
+                exit_status = 1
+                status = "Failure"
+
+            # Record the end time
+            end_time = datetime.now()
+
+            # Update backup status to final status and include backup size
+            backup_size = os.path.getsize(backup_file)
+            final_backup_status_id = update_backup_status(ticket, start_time, end_time, status, backup_size)
+    else:
+        print("Backup process failed.")
+        exit_status = 1
 
 if __name__ == "__main__":
     main()
+
+
+
+
 

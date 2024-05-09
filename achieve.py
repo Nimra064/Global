@@ -25,10 +25,9 @@ def create_second_backup_table(conn):
         cur.execute("""
             CREATE TABLE IF NOT EXISTS second_backup (
                 id SERIAL PRIMARY KEY,
-                folder_name VARCHAR(255),
-                backup_name VARCHAR(255),
+                ticketNo VARCHAR(255),
                 backup_size BIGINT,
-                backup_time TIMESTAMP
+                createdAt TIMESTAMP
             )
         """)
         conn.commit()
@@ -42,7 +41,7 @@ def insert_into_second_backup(conn, folder_name, backup_name, backup_size):
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO second_backup (folder_name, backup_name, backup_size, backup_time)
+            INSERT INTO second_backup (ticketNo, backup_size, createdAt)
             VALUES (%s, %s, %s, %s)
         """, (folder_name, backup_name, backup_size, datetime.now()))
         conn.commit()
@@ -51,12 +50,8 @@ def insert_into_second_backup(conn, folder_name, backup_name, backup_size):
     except psycopg2.Error as e:
         print(f"Error inserting record into second_backup table: {e}")
 
-def move_old_backups():
-    # Directory for main backups
-    main_backup_directory = "BackupRecord"
-    # Directory for second backups (older than 4 days)
-    second_backup_directory = "SecondBackup"
-
+def move_old_backups(main_backup_directory ,second_backup_directory , days):
+    
     # Create the second backup directory if it doesn't exist
     os.makedirs(second_backup_directory, exist_ok=True)
 
@@ -64,7 +59,7 @@ def move_old_backups():
     current_date = datetime.now()
 
     # Define the threshold date (4 days ago)
-    threshold_date = current_date - timedelta(days=4)
+    threshold_date = current_date - timedelta(days=days)
     print("Threshold Date:", threshold_date)
 
     # Counter to track moved folders
@@ -111,7 +106,12 @@ def move_old_backups():
     conn.close()
 
 if __name__ == "__main__":
-    move_old_backups()
+
+    main_backup_directory = "BackupRecord"
+    second_backup_directory = "SecondBackup"
+    days=4
+
+    move_old_backups(main_backup_directory ,second_backup_directory , days)
 
 
 
